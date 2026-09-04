@@ -1,5 +1,4 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { test, expect } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -69,22 +68,22 @@ test("local adapters run upstream conversation and search services", async () =>
       { role: "user", content: "Ravenstone needs a verified rollback plan before release." },
       { role: "assistant", content: "The release contingency is recorded." },
     ]);
-    assert.equal(messages.length, 2);
+    expect(messages.length).toBe(2);
 
     const stored = await getConversation(env, organizationId, conversationId, 1, 0);
-    assert.equal(stored?.messages[0].content, "Ravenstone needs a verified rollback plan before release.");
-    assert.equal(stored?.messages[0].sequence, 1);
+    expect(stored?.messages[0].content).toBe("Ravenstone needs a verified rollback plan before release.");
+    expect(stored?.messages[0].sequence).toBe(1);
 
     const keyword = await searchConversations(env, organizationId, "Ravenstone", 5);
-    assert.equal(keyword[0]?.conversation_id, conversationId);
+    expect(keyword[0]?.conversation_id).toBe(conversationId);
 
     const semantic = await searchConversations(env, organizationId, "release contingency", 5);
-    assert.equal(semantic[0]?.conversation_id, conversationId);
+    expect(semantic[0]?.conversation_id).toBe(conversationId);
 
     const migrations = db.raw.prepare("SELECT COUNT(*) AS count FROM _local_migrations").get() as { count: number };
-    assert.equal(migrations.count, 36);
+    expect(migrations.count).toBe(36);
     const vectors = db.raw.prepare("SELECT COUNT(*) AS count FROM local_vectors").get() as { count: number };
-    assert.ok(vectors.count > 0);
+    expect(vectors.count).toBeGreaterThan(0);
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });
