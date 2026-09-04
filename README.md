@@ -29,6 +29,10 @@ Engram is an MCP-native memory server that stores complete, uncompressed convers
 
 3. **Start using it.** Your agent now has persistent memory.
 
+## AcidicSoil fork: local-first mode
+
+This fork keeps `get-engram/engram` as its upstream baseline and adds a thin local-only runtime for personal use. The local runtime reuses the upstream MCP tools, services, chunking, search logic, and database migrations while adapting D1 to Node 24 SQLite, Workers AI to a localhost LM Studio embedding endpoint, Vectorize to local derived vector storage, and R2 message bodies to inline SQLite. No Engram account, API key, Cloudflare service, or hosted vector database is required for this mode. See [Self-hosting](docs/self-hosting.md#local-personal-mode-acidicsoil-fork).
+
 ## How it works
 
 - **Verbatim storage** — every message stored exactly as sent, no summarization or compression
@@ -49,7 +53,7 @@ Read the full [architecture deep-dive](https://getengram.app/docs/architecture).
 
 ## MCP tools
 
-Engram exposes 6 tools via MCP:
+The hosted server exposes 8 core memory tools via MCP:
 
 | Tool | Description |
 |------|-------------|
@@ -59,6 +63,8 @@ Engram exposes 6 tools via MCP:
 | `get_conversation` | Retrieve a conversation with its messages |
 | `list_conversations` | List conversations with filtering and pagination |
 | `delete_conversation` | Remove a conversation and its data |
+| `memory_status` | Inspect memory usage/status |
+| `trace_memory` | Trace a durable memory to its source conversation and creation reason |
 
 See the [API reference](https://getengram.app/docs/api-reference) for full parameters and examples.
 

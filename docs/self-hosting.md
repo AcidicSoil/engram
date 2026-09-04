@@ -1,5 +1,60 @@
 # Self-Hosting
 
+
+## Local personal mode (AcidicSoil fork)
+
+`AcidicSoil/engram` includes a stdio MCP runtime for a single-user local machine. It reuses the upstream Engram MCP tools, services, chunking/search behavior, and SQL migrations. A thin adapter maps D1 to Node 24 SQLite, Workers AI to an OpenAI-compatible localhost embedding endpoint, Vectorize to local derived vector storage, and R2 message bodies to inline SQLite. SQLite FTS5 provides keyword retrieval; semantic retrieval falls back to FTS-only when the embedding endpoint is unavailable.
+
+The default database is `~/.local/share/engram/local.db`. The runtime creates it with mode `0600`. Derived chunks and embeddings can be rebuilt from canonical conversation/message rows with the `reindex` MCP tool. The local migrator applies the upstream migrations unchanged; before upstream migration `0003_team_tier.sql` it supplies the historical `organizations.email` column that upstream expects from an earlier production deploy.
+
+From the fork root:
+
+```bash
+mise exec node@24 pnpm@9.15.0 -- pnpm install --frozen-lockfile
+mcporter config add engram-local \
+  --command "$HOME/.local/bin/mise" \
+  --description "Local-first Engram memory" \
+  --env ENGRAM_LOCAL_DB="$HOME/.local/share/engram/local.db" \
+  --env ENGRAM_LOCAL_EMBEDDING_URL="http://127.0.0.1:1234/v1/embeddings" \
+  --env ENGRAM_LOCAL_EMBEDDING_MODEL="text-embedding-nomic-embed-text-v1.5" \
+  --scope home -- \
+  exec node@24 pnpm@9.15.0 -- pnpm --dir "$(pwd)" --filter @getengram/mcp-server exec tsx local/server.ts
+```
+
+Verify discovery and the local store:
+
+```bash
+mcporter list engram-local --status --json
+mcporter list engram-local --brief
+mcporter call engram-local.memory_status --output json
+
+# Full round-trip proof; creates and removes only its own verification records
+bash apps/mcp-server/local/verify-mcporter.sh
+```
+
+The local server exposes `create_conversation`, `append_messages`, `search`, `get_conversation`, `list_conversations`, `delete_conversation`, `trace_memory`, `reindex`, and `memory_status`.
+
+For a curated memory derived from another conversation, put provenance in `messages[].metadata.memory_provenance`:
+
+```json
+{
+  "source": {
+    "type": "chatgpt",
+    "conversation_id": "conv_source",
+    "message_ids": ["msg_source"]
+  },
+  "reason": {
+    "type": "explicit_user_request",
+    "text": "The user explicitly asked to preserve this as a durable rule."
+  },
+  "actor": "chatgpt"
+}
+```
+
+Use `trace_memory` with `memory_id` to move from a durable memory back to its source and reason. Use `source_conversation_id` to list durable memories derived from a conversation.
+
+## Cloudflare self-hosting (upstream mode)
+
 Engram runs entirely on Cloudflare's developer platform. You can deploy your own instance with a free Cloudflare account.
 
 ## Prerequisites

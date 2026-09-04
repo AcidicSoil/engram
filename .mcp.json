@@ -1,10 +1,19 @@
 {
   "mcpServers": {
     "engram": {
-      "url": "https://mcp.getengram.app/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_ENGRAM_API_KEY"
-      }
+      "command": "mise",
+      "args": [
+        "exec",
+        "node@24",
+        "pnpm@9.15.0",
+        "--",
+        "pnpm",
+        "--filter",
+        "@getengram/mcp-server",
+        "exec",
+        "tsx",
+        "local/server.ts"
+      ]
     }
   }
 }

@@ -30,13 +30,16 @@ import type { Env, AuthContext } from "../../types.js";
 export function registerAppendMessages(
   server: McpServer,
   env: Env,
-  auth: AuthContext
+  auth: AuthContext,
+  options: { local?: boolean } = {},
 ) {
+  const description = options.local
+    ? "Store messages locally, verbatim and automatically chunked + embedded for hybrid search. conversation_id is optional; omit it to use the default Memory conversation. For a curated durable memory derived from another conversation, put its source and creation reason in messages[].metadata.memory_provenance so trace_memory can explain where it came from and why it exists."
+    : "Store messages in Engram memory, verbatim and automatically chunked + embedded for search. Pass the relevant messages from the CURRENT conversation. conversation_id is OPTIONAL: omit it to append to the user's default memory (recommended for general 'remember this' requests) — never ask the user for an id. Pass a conversation_id (from create_conversation) only when you want to group a distinct topic, then reuse that id. The response returns the conversation_id used. Note: you can only store messages from the current conversation — you cannot fetch a user's past or external chat history; for bulk history, tell them to export their data and run `engram import`. Never store secrets here (passwords, API keys, tokens, government IDs) — Engram has a separate zero-knowledge encrypted vault for those; see the SECRETS section of the server instructions. Optionally accepts client-encrypted vault entries for secrets detected client-side. When storing a curated durable memory derived from another conversation, put its source and creation reason in messages[].metadata.memory_provenance so trace_memory can explain where it came from and why it exists.";
   server.registerTool(
     "append_messages",
     {
-      description:
-        "Store messages in Engram memory, verbatim and automatically chunked + embedded for search. Pass the relevant messages from the CURRENT conversation. conversation_id is OPTIONAL: omit it to append to the user's default memory (recommended for general 'remember this' requests) — never ask the user for an id. Pass a conversation_id (from create_conversation) only when you want to group a specific topic. The response returns the conversation_id used. Note: you can only store messages from the current conversation — you cannot fetch a user's past or external chat history; for bulk history, tell them to export their data and run `engram import`. Never store secrets here (passwords, API keys, tokens, government IDs) — Engram has a separate zero-knowledge encrypted vault for those; see the SECRETS section of the server instructions. Optionally accepts client-encrypted vault entries for secrets detected client-side.",
+      description,
       inputSchema: {
       conversation_id: z
         .string()

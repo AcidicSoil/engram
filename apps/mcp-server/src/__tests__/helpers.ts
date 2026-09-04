@@ -136,6 +136,20 @@ export function createMockD1(): D1Database {
           return { results, success: true, meta: {} };
         }
 
+        if (sql.includes("json_extract(metadata") && bindings.length >= 2) {
+          const sourceConversationId = bindings[1];
+          results = results.filter((row) => {
+            try {
+              const metadata = typeof row.metadata === "string"
+                ? JSON.parse(row.metadata)
+                : row.metadata;
+              return metadata?.memory_provenance?.source?.conversation_id === sourceConversationId;
+            } catch {
+              return false;
+            }
+          });
+        }
+
         // Filter by organization_id
         if (sql.includes("organization_id = ?") && bindings[0]) {
           results = results.filter(

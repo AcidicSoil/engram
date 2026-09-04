@@ -71,6 +71,22 @@ export function getMessagesBySequenceRange(
     .all();
 }
 
+export function getMessagesByMemorySourceConversation(
+  db: D1Database,
+  organizationId: string,
+  sourceConversationId: string,
+) {
+  return db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE organization_id = ?
+         AND json_extract(metadata, '$.memory_provenance.source.conversation_id') = ?
+       ORDER BY created_at ASC, sequence ASC`,
+    )
+    .bind(organizationId, sourceConversationId)
+    .all();
+}
+
 export function getMessageById(
   db: D1Database,
   messageId: string,

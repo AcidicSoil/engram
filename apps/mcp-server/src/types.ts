@@ -17,6 +17,8 @@ export interface Env {
    *  requests without a redeploy, so a window can be opened and closed in
    *  seconds. Reads are unaffected. */
   WRITES_FROZEN?: string;
+  /** Local personal mode keeps canonical message bodies inline in SQLite. */
+  LOCAL_INLINE_CONTENT?: boolean;
   // Supabase JWT secret — used to verify access tokens from engram-web.
   // The dashboard sends the user's Supabase access token as a Bearer on
   // /signup; the worker verifies the HS256 signature and extracts the

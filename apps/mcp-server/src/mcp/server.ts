@@ -6,6 +6,7 @@ import { registerGetConversation } from "./tools/get-conversation.js";
 import { registerListConversations } from "./tools/list-conversations.js";
 import { registerDeleteConversation } from "./tools/delete-conversation.js";
 import { registerMemoryStatus } from "./tools/memory-status.js";
+import { registerTraceMemory } from "./tools/trace-memory.js";
 import { registerResolveVault } from "./tools/resolve-vault.js";
 import { registerVaultSet } from "./tools/vault-set.js";
 import { registerVaultGet } from "./tools/vault-get.js";
@@ -51,12 +52,26 @@ When the user wants to save a secret ("save my API key", "add this to my vault")
 const VAULT_INSTRUCTIONS_FIRST_PARTY = `${VAULT_INSTRUCTIONS_SHARED}
 When the user wants to save a secret, use the vault tools (vault_set / vault_get / vault_list / resolve_vault). Values must be encrypted client-side with the user's vault key (from \`engram vault keygen\`) before calling vault_set — the server only stores ciphertext. If you don't hold the vault key, direct the user to \`engram vault set <NAME>\` in the CLI, which handles encryption locally.`;
 
-export function createMcpServer(env: Env, auth: AuthContext): McpServer {
-  const instructions =
-    SERVER_INSTRUCTIONS +
-    (isExternalOAuthClient(auth)
-      ? VAULT_INSTRUCTIONS_OAUTH
-      : VAULT_INSTRUCTIONS_FIRST_PARTY);
+export interface McpServerOptions {
+  mode?: "hosted" | "local";
+}
+
+const LOCAL_SERVER_INSTRUCTIONS = `Engram Local is persistent, searchable memory owned by this machine.
+Store durable conversation evidence verbatim. Use search to recall prior context.
+When a stored message is a curated memory derived from another conversation, put provenance in messages[].metadata.memory_provenance with its source and creation reason. Use trace_memory to explain why a memory exists or which memories came from a conversation.`;
+
+export function createMcpServer(
+  env: Env,
+  auth: AuthContext,
+  options: McpServerOptions = {},
+): McpServer {
+  const local = options.mode === "local";
+  const instructions = local
+    ? LOCAL_SERVER_INSTRUCTIONS
+    : SERVER_INSTRUCTIONS +
+      (isExternalOAuthClient(auth)
+        ? VAULT_INSTRUCTIONS_OAUTH
+        : VAULT_INSTRUCTIONS_FIRST_PARTY);
   const server = new McpServer(
     {
       name: "Engram",
@@ -68,19 +83,20 @@ export function createMcpServer(env: Env, auth: AuthContext): McpServer {
   // Core memory tools — available to every client (incl. OAuth-connected
   // apps like ChatGPT).
   registerCreateConversation(server, env, auth);
-  registerAppendMessages(server, env, auth);
+  registerAppendMessages(server, env, auth, { local });
   registerSearch(server, env, auth);
   registerGetConversation(server, env, auth);
   registerListConversations(server, env, auth);
   registerDeleteConversation(server, env, auth);
-  registerMemoryStatus(server, env, auth);
+  registerMemoryStatus(server, env, auth, { local });
+  registerTraceMemory(server, env, auth);
 
   // First-party-only tools. External OAuth clients (auth.apiKeyId is
   // "oauth:<client_id>") get the memory-only surface: the secrets vault
   // stores credentials (which app marketplaces like ChatGPT's prohibit
   // collecting) and manage_subscription is billing, not memory. API-key /
   // SDK callers — the user's own agents — keep the full toolset.
-  if (!isExternalOAuthClient(auth)) {
+  if (!local && !isExternalOAuthClient(auth)) {
     registerResolveVault(server, env, auth);
     registerVaultSet(server, env, auth);
     registerVaultGet(server, env, auth);
@@ -91,7 +107,7 @@ export function createMcpServer(env: Env, auth: AuthContext): McpServer {
 
   // Admin tools — only available when authenticated via ADMIN_SECRET.
   // Cross-org visibility for the business owner.
-  if (auth.isAdmin) {
+  if (!local && auth.isAdmin) {
     registerAdminMetrics(server, env, auth);
   }
 

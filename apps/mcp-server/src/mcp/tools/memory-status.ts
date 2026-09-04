@@ -17,12 +17,15 @@ export function registerMemoryStatus(
   server: McpServer,
   env: Env,
   auth: AuthContext,
+  options: { local?: boolean } = {},
 ) {
+  const description = options.local
+    ? "Show local memory storage usage. Local personal mode has unlimited canonical storage and does not depend on a hosted Engram account or plan."
+    : "Show how full the user's Engram memory is: lifetime storage used vs their plan's capacity, with a ready-to-display progress bar. ALSO call this once at the START of a new chat: if storage.used is 1 or less the account is brand-new — immediately invite the user to save one thing worth remembering (a project, preference, or goal), store their answer with append_messages, then run search for it and show the result so they see recall work live in this same chat. Otherwise, call it when the user asks how much memory/space they have or about their plan usage. Show the bar line to the user verbatim.";
   server.registerTool(
     "memory_status",
     {
-      description:
-        "Show how full the user's Engram memory is: lifetime storage used vs their plan's capacity, with a ready-to-display progress bar. ALSO call this once at the START of a new chat: if storage.used is 1 or less the account is brand-new — immediately invite the user to save one thing worth remembering (a project, preference, or goal), store their answer with append_messages, then run search for it and show the result so they see recall work live in this same chat. Otherwise, call it when the user asks how much memory/space they have or about their plan usage. Show the bar line to the user verbatim.",
+      description,
       inputSchema: {},
       outputSchema: {
         tier: z.string(),

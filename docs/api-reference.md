@@ -1,6 +1,6 @@
 # API Reference
 
-Engram exposes 7 core memory tools via the Model Context Protocol (MCP), plus vault and subscription tools on API-key surfaces. All tools are accessed through the `/mcp` endpoint using Streamable HTTP transport.
+Engram exposes 8 core memory tools via the Model Context Protocol (MCP), plus vault and subscription tools on API-key surfaces. All tools are accessed through the `/mcp` endpoint using Streamable HTTP transport.
 
 All requests require an `Authorization: Bearer engram_sk_live_...` header.
 
@@ -60,6 +60,8 @@ Append messages to a conversation. Messages are stored verbatim and automaticall
 | `tool_call_id` | string | No | ID of the tool call this message responds to |
 | `tool_name` | string | No | Name of the tool that was called |
 | `metadata` | object | No | Arbitrary key-value metadata |
+
+For curated durable memories, `metadata.memory_provenance` can retain the source conversation and why the memory was promoted. The traceable form contains `source.type`, `source.conversation_id`, optional source message/range/URI fields, `reason.type`, `reason.text`, and optional `actor` / `created_at`. `trace_memory` reads this metadata without changing the original source conversation.
 
 ### Response
 
@@ -142,6 +144,54 @@ search
 ```
 
 Results are ranked by cosine similarity. Each result includes the matching chunk text and the full original messages from that section of the conversation.
+
+
+---
+
+## memory_status
+
+Inspect the current memory usage/status for the caller. The hosted server returns plan/storage information. The local personal runtime preserves the same storage-oriented response shape, runs as the local `enterprise` owner, and reports unlimited capacity with the current stored-message count.
+
+### Parameters
+
+None.
+
+### Example
+
+```text
+memory_status
+```
+
+---
+
+## trace_memory
+
+Trace why a durable memory exists or find memories that came from one source conversation. Traceable memories use `messages[].metadata.memory_provenance`; no separate canonical copy of the source conversation is required.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `memory_id` | string | Conditional | Stored memory message ID to trace back to source evidence |
+| `source_conversation_id` | string | Conditional | Source conversation ID to reverse-trace into derived memories |
+
+Provide exactly one parameter.
+
+### Example
+
+```text
+trace_memory
+  memory_id: "msg_memory"
+```
+
+The response contains the memory, its provenance source, creation reason, and source conversation metadata when that conversation exists in the same Engram store and is visible to the caller.
+
+```text
+trace_memory
+  source_conversation_id: "conv_source"
+```
+
+The reverse form returns the durable memory messages whose provenance points to that conversation.
 
 ---
 

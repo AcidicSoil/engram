@@ -33,6 +33,9 @@ export async function storeContent(
   text: string,
 ): Promise<{ content: string; encoding: string | null }> {
   const { content, encoding } = await compressContent(text);
+  if (env.LOCAL_INLINE_CONTENT) {
+    return { content, encoding };
+  }
   try {
     await env.CONTENT.put(r2Key(messageId), content);
     return { content: "", encoding: `r2:${encoding ?? "raw"}` };
@@ -92,7 +95,7 @@ export async function deleteContent(
   env: Env,
   messageIds: string[],
 ): Promise<number> {
-  if (messageIds.length === 0) return 0;
+  if (messageIds.length === 0 || env.LOCAL_INLINE_CONTENT) return 0;
   let deleted = 0;
   // R2 accepts up to 1000 keys per delete call.
   for (let i = 0; i < messageIds.length; i += 1000) {

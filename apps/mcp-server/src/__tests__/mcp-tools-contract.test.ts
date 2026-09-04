@@ -8,6 +8,7 @@ import { registerSearch } from "../mcp/tools/search.js";
 import { registerGetConversation } from "../mcp/tools/get-conversation.js";
 import { registerListConversations } from "../mcp/tools/list-conversations.js";
 import { registerDeleteConversation } from "../mcp/tools/delete-conversation.js";
+import { registerTraceMemory } from "../mcp/tools/trace-memory.js";
 import { registerResolveVault } from "../mcp/tools/resolve-vault.js";
 import { registerVaultSet } from "../mcp/tools/vault-set.js";
 import { registerVaultGet } from "../mcp/tools/vault-get.js";
@@ -248,6 +249,65 @@ describe("MCP tool contract — wire field names", () => {
     });
   });
 
+  describe("trace_memory", () => {
+    it("traces a memory back to its source conversation and creation reason", async () => {
+      const { server, tools } = createCaptureServer();
+      registerTraceMemory(server, env, { ...auth, tier: "enterprise" });
+      const tool = tools.get("trace_memory");
+      expect(tool).toBeDefined();
+      expect(tool!.schema).toHaveProperty("memory_id");
+      expect(tool!.schema).toHaveProperty("source_conversation_id");
+
+      const sourceConversationId = "conv_trace_source";
+      const memoryConversationId = "conv_trace_memory";
+      await dbInsertConversation(db, sourceConversationId, ORG, "Source Chat", null, [], {});
+      await dbInsertConversation(db, memoryConversationId, ORG, "Memory", null, [], {});
+      const { insertMessages } = await import("@getengram/db");
+      await insertMessages(db, [{
+        id: "msg_trace_memory",
+        conversationId: memoryConversationId,
+        organizationId: ORG,
+        role: "user",
+        content: "Never terminate an unknown process until ownership is proven.",
+        contentEncoding: null,
+        toolCallId: null,
+        toolName: null,
+        sequence: 1,
+        metadata: {
+          memory_provenance: {
+            source: {
+              type: "chatgpt",
+              conversation_id: sourceConversationId,
+              message_ids: ["source-message-17"],
+            },
+            reason: {
+              type: "explicit_user_request",
+              text: "User explicitly asked that this become a durable operating rule.",
+            },
+            actor: "chatgpt",
+          },
+        },
+      }]);
+
+      const traced = parseToolResponse(await tool!.handler({ memory_id: "msg_trace_memory" }));
+      expect(traced.isError).toBe(false);
+      expect(traced.data.mode).toBe("memory");
+      expect(traced.data.memory.id).toBe("msg_trace_memory");
+      expect(traced.data.provenance.source.conversation_id).toBe(sourceConversationId);
+      expect(traced.data.provenance.reason.type).toBe("explicit_user_request");
+      expect(traced.data.source_conversation.id).toBe(sourceConversationId);
+
+      const reverse = parseToolResponse(
+        await tool!.handler({ source_conversation_id: sourceConversationId })
+      );
+      expect(reverse.isError).toBe(false);
+      expect(reverse.data.mode).toBe("source_conversation");
+      expect(reverse.data.total).toBe(1);
+      expect(reverse.data.memories[0].id).toBe("msg_trace_memory");
+      expect(reverse.data.memories[0].provenance.reason.text).toMatch(/durable operating rule/);
+    });
+  });
+
   describe("get_conversation", () => {
     it("returns { conversation, messages } in the wire response", async () => {
       const { server, tools } = createCaptureServer();
@@ -333,6 +393,7 @@ describe("MCP tool contract — wire field names", () => {
         "get_conversation",
         "list_conversations",
         "delete_conversation",
+        "trace_memory",
         "resolve_vault",
         "vault_set",
         "vault_get",
@@ -347,6 +408,7 @@ describe("MCP tool contract — wire field names", () => {
       registerGetConversation(server, env, auth);
       registerListConversations(server, env, auth);
       registerDeleteConversation(server, env, auth);
+      registerTraceMemory(server, env, auth);
       registerResolveVault(server, env, auth);
       registerVaultSet(server, env, auth);
       registerVaultGet(server, env, auth);
@@ -365,6 +427,7 @@ describe("MCP tool contract — wire field names", () => {
       registerGetConversation(server, env, auth);
       registerListConversations(server, env, auth);
       registerDeleteConversation(server, env, auth);
+      registerTraceMemory(server, env, auth);
       registerResolveVault(server, env, auth);
       registerVaultSet(server, env, auth);
       registerVaultGet(server, env, auth);
@@ -376,6 +439,7 @@ describe("MCP tool contract — wire field names", () => {
         "search",
         "get_conversation",
         "list_conversations",
+        "trace_memory",
         "resolve_vault",
         "vault_get",
         "vault_list",
