@@ -32,7 +32,9 @@ mcporter call engram-local.memory_status --output json
 bash apps/mcp-server/local/verify-mcporter.sh
 ```
 
-The local server exposes `create_conversation`, `append_messages`, `search`, `get_conversation`, `list_conversations`, `delete_conversation`, `trace_memory`, `reindex`, and `memory_status`.
+The local server always exposes the nine Engram-owned tools: `create_conversation`, `append_messages`, `search`, `get_conversation`, `list_conversations`, `delete_conversation`, `trace_memory`, `reindex`, and `memory_status`.
+
+It also registers an optional read-only ABPT source adapter: `abpt_list_projects`, `abpt_list_conversations`, `abpt_get_conversation`, `abpt_get_evidence`, `abpt_search`, `abpt_grep`, `abpt_status`, and `abpt_sync_status`. These tools call only the loopback ABPT API (`http://127.0.0.1:4318` by default). `abpt_search` always sends `mode=local`; this MCP surface cannot select ABPT's live ChatGPT lane. If ABPT is stopped or unavailable, only the `abpt_*` calls fail; Engram memory, search, provenance, and reindex remain independent. Override the loopback endpoint with `ABPT_API_URL` when needed.
 
 For a curated memory derived from another conversation, put provenance in `messages[].metadata.memory_provenance`:
 

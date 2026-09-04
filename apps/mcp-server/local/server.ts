@@ -9,6 +9,7 @@ import type { AuthContext, Env } from "../src/types.js";
 import { applyUpstreamMigrations, LocalD1Database, seedLocalOwner } from "./sqlite-d1.js";
 import { createLocalAi, createLocalVectorize, localContentBucket } from "./local-bindings.js";
 import { reindexConversation } from "./reindex.js";
+import { registerAbptTools } from "./abpt-tools.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -18,6 +19,7 @@ const dbPath = process.env.ENGRAM_LOCAL_DB ?? join(dataHome, "engram", "local.db
 const embeddingUrl = process.env.ENGRAM_LOCAL_EMBEDDING_URL ?? "http://127.0.0.1:1234/v1/embeddings";
 const embeddingModel = process.env.ENGRAM_LOCAL_EMBEDDING_MODEL ?? "text-embedding-nomic-embed-text-v1.5";
 const organizationId = "org_local";
+const abptApiUrl = process.env.ABPT_API_URL ?? "http://127.0.0.1:4318";
 
 const localDb = new LocalD1Database(dbPath);
 applyUpstreamMigrations(localDb.raw, migrationsDir);
@@ -51,6 +53,7 @@ const auth: AuthContext = {
 };
 
 const server = createMcpServer(env, auth, { mode: "local" });
+registerAbptTools(server, { baseUrl: abptApiUrl });
 server.registerTool(
   "reindex",
   {

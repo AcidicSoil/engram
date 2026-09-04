@@ -58,7 +58,8 @@ export interface McpServerOptions {
 
 const LOCAL_SERVER_INSTRUCTIONS = `Engram Local is persistent, searchable memory owned by this machine.
 Store durable conversation evidence verbatim. Use search to recall prior context.
-When a stored message is a curated memory derived from another conversation, put provenance in messages[].metadata.memory_provenance with its source and creation reason. Use trace_memory to explain why a memory exists or which memories came from a conversation.`;
+When a stored message is a curated memory derived from another conversation, put provenance in messages[].metadata.memory_provenance with its source and creation reason. Use trace_memory to explain why a memory exists or which memories came from a conversation.
+ABPT remains authoritative for captured ChatGPT history when its local API is available. The optional abpt_* tools are read-only source adapters; abpt_search is forced to ABPT's local index and never invokes its live ChatGPT lane. An unavailable ABPT dependency must not block Engram memory or provenance operations. If trace_memory returns an ABPT/ChatGPT source id that is not stored inside Engram, use abpt_get_conversation when ABPT is available; otherwise report that the external source is temporarily unavailable.`;
 
 export function createMcpServer(
   env: Env,

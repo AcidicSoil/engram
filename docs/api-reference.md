@@ -193,6 +193,10 @@ trace_memory
 
 The reverse form returns the durable memory messages whose provenance points to that conversation.
 
+### Local-only ABPT source adapter
+
+The AcidicSoil local runtime additionally registers eight read-only `abpt_*` tools that reference ABPT-owned ChatGPT evidence without copying it into Engram: `abpt_list_projects`, `abpt_list_conversations`, `abpt_get_conversation`, `abpt_get_evidence`, `abpt_search`, `abpt_grep`, `abpt_status`, and `abpt_sync_status`. The adapter accepts loopback ABPT endpoints only. `abpt_search` is hard-wired to `mode=local`, so this surface cannot invoke ABPT's live ChatGPT search lane. ABPT availability is optional; failures on these external-source tools do not affect Engram's core memory or provenance tools.
+
 ---
 
 ## get_conversation
