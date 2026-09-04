@@ -15,8 +15,9 @@ import {
 
 const REDIRECT = "https://chatgpt.com/connector/callback";
 
-// API-key auth updates last_used_at via executionCtx.waitUntil; tests must
-// supply a mock context (the OAuth-token path doesn't need it).
+// Data-plane middleware uses executionCtx.waitUntil for metering and API-key
+// last-used updates. Tests that reach an authenticated data-plane route must
+// supply the context that Cloudflare provides in production.
 const MOCK_CTX = {
   waitUntil: () => {},
   passThroughOnException: () => {},
@@ -410,8 +411,9 @@ describe("Access token authenticates the MCP endpoint", () => {
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
       }),
       env,
+      MOCK_CTX,
     );
-    expect(ok.status).not.toBe(401);
+    expect(ok.status).toBe(200);
 
     // Bogus access token: 401 with the resource-metadata challenge.
     const bad = await app.fetch(
@@ -420,6 +422,7 @@ describe("Access token authenticates the MCP endpoint", () => {
         headers: { Authorization: "Bearer engram_at_totally-made-up" },
       }),
       env,
+      MOCK_CTX,
     );
     expect(bad.status).toBe(401);
     expect(bad.headers.get("WWW-Authenticate")).toContain("resource_metadata");
@@ -485,10 +488,19 @@ describe("Connected apps management (/api/oauth/connections)", () => {
     const { env, apiKey, clientId, accessToken } = await setup();
     // Token works before revoke.
     const before = await app.fetch(
-      new Request("http://mcp.test/mcp", { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } }),
+      new Request("http://mcp.test/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+      }),
       env,
+      MOCK_CTX,
     );
-    expect(before.status).not.toBe(401);
+    expect(before.status).toBe(200);
 
     await app.fetch(
       new Request(`http://mcp.test/api/oauth/connections/${clientId}`, {
@@ -500,8 +512,17 @@ describe("Connected apps management (/api/oauth/connections)", () => {
 
     // Access token deleted → 401.
     const after = await app.fetch(
-      new Request("http://mcp.test/mcp", { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } }),
+      new Request("http://mcp.test/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" }),
+      }),
       env,
+      MOCK_CTX,
     );
     expect(after.status).toBe(401);
   });
