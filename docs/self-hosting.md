@@ -37,6 +37,17 @@ mcporter call engram-local.memory_status --output json
 pnpm --filter @getengram/mcp-server run verify:local-real -- engram-local
 ```
 
+To restore a native Engram JSON export into the local store, stop the local MCP process first, then run:
+
+```bash
+mcporter daemon stop
+ENGRAM_LOCAL_DB="$HOME/.local/share/engram/local.db" \
+  pnpm --filter @getengram/mcp-server run import:local-export -- /path/to/engram-export.json
+mcporter daemon start
+```
+
+The restore preserves exported conversation IDs, timestamps, tags, metadata, message order, and tool names. Export files do not contain original message IDs or message metadata, so restored messages receive new IDs and empty message metadata. Re-running the same export is idempotent; an existing conversation with the same ID but different exported data is rejected instead of overwritten. After restart, the local semantic coordinator builds missing chunks and vectors automatically.
+
 `memory_status.semantic.state` reports `preparing`, `reindexing`, `ready`, or `degraded`. The same object reports the active model, cache path, selected backend, vector count, and whether a rebuild is pending. `search` always runs FTS and adds semantic results only while the active model and stored vector fingerprint are compatible.
 
 The local server exposes ten Engram-owned tools: `create_conversation`, `append_messages`, `search`, `get_conversation`, `list_conversations`, `delete_conversation`, `memory_status`, `whoami`, `trace_memory`, and `reindex`.

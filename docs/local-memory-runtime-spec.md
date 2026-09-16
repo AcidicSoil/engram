@@ -13,7 +13,7 @@ Reference state used for this plan:
 
 Implementation verification:
 
-- default MCP server test suite: 264/264 passing
+- default MCP server test suite: 268/268 passing
 - TypeScript typecheck: passing
 - Cloudflare Worker dry-run build: passing, with no `node-llama-cpp` symbols in the Worker output
 - cold-cache real GGUF runtime: automatic model acquisition reached `ready`

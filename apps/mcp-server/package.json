@@ -13,7 +13,8 @@
     "db:migrate:remote": "wrangler d1 migrations apply engram-db --remote",
     "seed": "node --loader tsx scripts/seed.ts",
     "seed:demo": "node --loader tsx scripts/seed-demo.ts",
-    "verify:local-real": "bash local/verify-mcporter.sh"
+    "verify:local-real": "bash local/verify-mcporter.sh",
+    "import:local-export": "tsx local/import-engram-export.ts"
   },
   "dependencies": {
     "@getengram/db": "workspace:*",
