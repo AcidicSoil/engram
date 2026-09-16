@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1-}" == "--" ]]; then
+  shift
+fi
 server="${1:-engram-local}"
 marker="EngramVerify$(date +%s)$$"
 source_id=""
@@ -38,6 +41,20 @@ wait_for_semantic_ready() {
   done
 }
 
+count_conversations() {
+  local offset=0 limit=100 total=0 payload count
+  while true; do
+    payload="$(call list_conversations "$(jq -nc --argjson limit "$limit" --argjson offset "$offset" '{limit:$limit,offset:$offset}')")"
+    count="$(jq -er '.conversations | length' <<<"$payload")"
+    total=$((total + count))
+    if (( count < limit )); then
+      printf '%s\n' "$total"
+      return 0
+    fi
+    offset=$((offset + count))
+  done
+}
+
 cleanup() {
   local id
   for id in "$memory_conversation_id" "$source_id"; do
@@ -51,7 +68,7 @@ trap cleanup EXIT
 status="$(mcporter list "$server" --status --json)"
 jq -e '.servers[0].status == "ok"' <<<"$status" >/dev/null
 wait_for_semantic_ready
-baseline_total="$(call list_conversations '{"limit":1}' | jq -er '.total')"
+baseline_total="$(count_conversations)"
 baseline_used="$(call memory_status '{}' | jq -er '.storage.used')"
 
 source_id="$(call create_conversation "$(jq -nc --arg title "$marker source" '{title:$title,agent_id:"local-verifier",tags:["verification"]}')" | jq -er '.conversation_id')"
@@ -84,7 +101,7 @@ memory_conversation_id=""
 call delete_conversation "$(jq -nc --arg id "$source_id" '{conversation_id:$id}')" >/dev/null
 source_id=""
 
-after_total="$(call list_conversations '{"limit":1}' | jq -er '.total')"
+after_total="$(count_conversations)"
 after_used="$(call memory_status '{}' | jq -er '.storage.used')"
 [[ "$after_total" == "$baseline_total" ]]
 [[ "$after_used" == "$baseline_used" ]]
