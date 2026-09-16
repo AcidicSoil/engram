@@ -117,6 +117,16 @@ export function applyUpstreamMigrations(db: DatabaseSync, migrationsDir: string)
       metadata_json TEXT NOT NULL DEFAULT '{}',
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS local_embedding_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      active_fingerprint TEXT,
+      indexed_fingerprint TEXT,
+      dimensions INTEGER,
+      last_indexed_at TEXT
+    );
+
+    INSERT OR IGNORE INTO local_embedding_state(id) VALUES(1);
   `);
 }
 
@@ -126,4 +136,53 @@ export function seedLocalOwner(db: DatabaseSync, organizationId = "org_local") {
     VALUES(?, 'Local Engram', 'local@localhost', 'enterprise')
   `).run(organizationId);
   db.prepare("UPDATE organizations SET tier='enterprise' WHERE id=?").run(organizationId);
+}
+
+export type LocalEmbeddingState = {
+  activeFingerprint: string | null;
+  indexedFingerprint: string | null;
+  dimensions: number | null;
+  lastIndexedAt: string | null;
+};
+
+export function getLocalEmbeddingState(db: DatabaseSync): LocalEmbeddingState {
+  const row = db.prepare(`
+    SELECT active_fingerprint, indexed_fingerprint, dimensions, last_indexed_at
+    FROM local_embedding_state WHERE id = 1
+  `).get() as {
+    active_fingerprint: string | null;
+    indexed_fingerprint: string | null;
+    dimensions: number | null;
+    last_indexed_at: string | null;
+  };
+  return {
+    activeFingerprint: row.active_fingerprint,
+    indexedFingerprint: row.indexed_fingerprint,
+    dimensions: row.dimensions,
+    lastIndexedAt: row.last_indexed_at,
+  };
+}
+
+export function setLocalActiveEmbedding(
+  db: DatabaseSync,
+  fingerprint: string,
+  dimensions: number,
+): void {
+  db.prepare(`
+    UPDATE local_embedding_state
+    SET active_fingerprint = ?, dimensions = ?
+    WHERE id = 1
+  `).run(fingerprint, dimensions);
+}
+
+export function markLocalEmbeddingIndexed(
+  db: DatabaseSync,
+  fingerprint: string,
+  dimensions: number,
+): void {
+  db.prepare(`
+    UPDATE local_embedding_state
+    SET indexed_fingerprint = ?, dimensions = ?, last_indexed_at = datetime('now')
+    WHERE id = 1
+  `).run(fingerprint, dimensions);
 }

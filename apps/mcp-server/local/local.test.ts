@@ -90,3 +90,63 @@ test("local adapters run upstream conversation and search services", async () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("embedding failure does not block chunk persistence or FTS", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "engram-local-fts-fallback-"));
+  const db = new LocalD1Database(join(dir, "engram.db"));
+  const organizationId = "org_local_fts_test";
+  try {
+    applyUpstreamMigrations(db.raw, migrationsDir);
+    seedLocalOwner(db.raw, organizationId);
+    const unavailableAi = {
+      async run() {
+        throw new Error("embedding runtime unavailable");
+      },
+    };
+    const env = {
+      DB: db as unknown as D1Database,
+      CONTENT: localContentBucket as unknown as R2Bucket,
+      VECTORIZE: createLocalVectorize(db.raw) as unknown as VectorizeIndex,
+      AI: unavailableAi as unknown as Ai,
+      LOCAL_INLINE_CONTENT: true,
+      SELF: {} as Fetcher,
+      DRAINER: {} as DurableObjectNamespace,
+      STRIPE_SECRET_KEY: "",
+      STRIPE_WEBHOOK_SECRET: "",
+      STRIPE_PRICE_ID_PRO: "",
+      STRIPE_PRICE_ID_TEAM: "",
+      APP_URL: "http://127.0.0.1",
+      ADMIN_SECRET: "",
+      SUPABASE_JWT_SECRET: "",
+      SUPABASE_URL: "",
+      SUPABASE_ANON_KEY: "",
+    } satisfies Env;
+    const conversationId = await createConversation(
+      env.DB,
+      organizationId,
+      "FTS fallback",
+      "local-test",
+      ["verification"],
+      {},
+    );
+    const messages = await appendMessages(env, organizationId, conversationId, [
+      { role: "user", content: "Copperfin protocol survives semantic indexing outages." },
+    ]);
+    expect(messages).toHaveLength(1);
+
+    const chunkCount = db.raw
+      .prepare("SELECT COUNT(*) AS count FROM conversation_chunks WHERE conversation_id = ?")
+      .get(conversationId) as { count: number };
+    expect(chunkCount.count).toBeGreaterThan(0);
+
+    const results = await searchConversations(env, organizationId, "Copperfin", 5);
+    expect(results[0]?.conversation_id).toBe(conversationId);
+    const vectorCount = db.raw.prepare("SELECT COUNT(*) AS count FROM local_vectors").get() as {
+      count: number;
+    };
+    expect(vectorCount.count).toBe(0);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

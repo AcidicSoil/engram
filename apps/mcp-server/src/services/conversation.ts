@@ -263,75 +263,55 @@ export async function appendMessages(
 
   // (message_count was bumped atomically with the inserts above.)
 
-  // Chunk the redacted messages for embedding.
-  // Indexing (embeddings + vectorize) is best-effort — if it fails, messages
-  // are still stored. They just won't be searchable until the next successful
-  // index run. This prevents AI model or Vectorize rate limits from crashing
-  // the entire append_messages request.
+  // Persist deterministic chunks first so FTS stays available even when
+  // semantic inference or the vector backend is unavailable.
   const chunks = chunkMessages(redacted);
 
   if (chunks.length > 0) {
-    try {
-      // Generate embeddings for all chunks
-      const texts = chunks.map((c) => c.text);
-      const embeddings = await generateEmbeddings(env.AI, texts);
-
-      // Prepare chunk records with vectorize IDs
-      const chunkRecords = chunks.map((chunk, i) => {
-        // Deterministic id -> re-indexing the same window is a pure upsert,
-        // never a duplicate. Same value for the row id and the vector id.
-        const cid = chunkId(
-          conversationId,
-          chunk.startSequence,
-          chunk.endSequence,
-          chunk.index,
-        );
-        return {
-          id: cid,
-          conversationId,
-          organizationId,
-          chunkText: chunk.text,
-          chunkSummary: summarizeChunk(chunk.text),
-          startSequence: chunk.startSequence,
-          endSequence: chunk.endSequence,
-          vectorizeId: cid,
-          embedding: embeddings[i],
-        };
-      });
-
-      // Insert chunks into D1
-      await insertChunks(
-        env.DB,
-        chunkRecords.map((c) => ({
-          id: c.id,
-          conversationId: c.conversationId,
-          organizationId: c.organizationId,
-          chunkText: c.chunkText,
-          chunkSummary: c.chunkSummary,
-          startSequence: c.startSequence,
-          endSequence: c.endSequence,
-          vectorizeId: c.vectorizeId,
-        }))
+    const chunkRecords = chunks.map((chunk) => {
+      const cid = chunkId(
+        conversationId,
+        chunk.startSequence,
+        chunk.endSequence,
+        chunk.index,
       );
+      return {
+        id: cid,
+        conversationId,
+        organizationId,
+        chunkText: chunk.text,
+        chunkSummary: summarizeChunk(chunk.text),
+        startSequence: chunk.startSequence,
+        endSequence: chunk.endSequence,
+        vectorizeId: cid,
+      };
+    });
 
-      // Upsert vectors to Vectorize
-      const vectors = chunkRecords.map((c) => ({
-        id: c.vectorizeId,
-        values: c.embedding,
-        metadata: {
-          organization_id: organizationId,
-          conversation_id: conversationId,
-          start_sequence: c.startSequence,
-          end_sequence: c.endSequence,
-        },
-      }));
+    await insertChunks(env.DB, chunkRecords);
 
-      await env.VECTORIZE.upsert(vectors);
+    // Semantic indexing is derived data. A failure here must not undo the
+    // canonical messages or the keyword-searchable chunk rows above.
+    try {
+      const embeddings = await generateEmbeddings(
+        env.AI,
+        chunks.map((chunk) => chunk.text),
+      );
+      await env.VECTORIZE.upsert(
+        chunkRecords.map((chunk, index) => ({
+          id: chunk.vectorizeId,
+          values: embeddings[index],
+          metadata: {
+            organization_id: organizationId,
+            conversation_id: conversationId,
+            start_sequence: chunk.startSequence,
+            end_sequence: chunk.endSequence,
+          },
+        })),
+      );
     } catch (err) {
-      // Log but don't fail — messages are already stored above.
       const msg = err instanceof Error ? err.message : String(err);
       console.error(
-        `[index] Failed to index ${chunks.length} chunk(s) for ${conversationId}: ${msg}`,
+        `[index] Failed semantic indexing for ${chunks.length} chunk(s) in ${conversationId}: ${msg}`,
       );
     }
   }

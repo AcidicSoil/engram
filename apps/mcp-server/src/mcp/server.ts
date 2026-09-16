@@ -5,7 +5,7 @@ import { registerSearch } from "./tools/search.js";
 import { registerGetConversation } from "./tools/get-conversation.js";
 import { registerListConversations } from "./tools/list-conversations.js";
 import { registerDeleteConversation } from "./tools/delete-conversation.js";
-import { registerMemoryStatus } from "./tools/memory-status.js";
+import { registerMemoryStatus, type LocalSemanticStatusView } from "./tools/memory-status.js";
 import { registerWhoami } from "./tools/whoami.js";
 import { registerTraceMemory } from "./tools/trace-memory.js";
 import { registerResolveVault } from "./tools/resolve-vault.js";
@@ -55,6 +55,7 @@ When the user wants to save a secret, use the vault tools (vault_set / vault_get
 
 export interface McpServerOptions {
   mode?: "hosted" | "local";
+  localStatus?: () => LocalSemanticStatusView;
 }
 
 const LOCAL_SERVER_INSTRUCTIONS = `Engram Local is persistent, searchable memory owned by this machine.
@@ -90,7 +91,7 @@ export function createMcpServer(
   registerGetConversation(server, env, auth);
   registerListConversations(server, env, auth);
   registerDeleteConversation(server, env, auth);
-  registerMemoryStatus(server, env, auth, { local });
+  registerMemoryStatus(server, env, auth, { local, localStatus: options.localStatus });
   registerWhoami(server, env, auth);
   registerTraceMemory(server, env, auth);
 

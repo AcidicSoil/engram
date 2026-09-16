@@ -1,6 +1,6 @@
 # Local memory runtime completion spec
 
-Status: ready for implementation
+Status: implemented and verified on 2026-09-16
 Scope: `AcidicSoil/engram` local personal mode only
 Feature branch: `feat/local-memory-provenance`
 
@@ -10,6 +10,15 @@ Reference state used for this plan:
 - current local `main`: `1e69e17`
 - feature divergence: 4 feature-only commits and 21 main-only commits
 - qmd reference: `tobi/qmd` main at `04e4dbd8245c527a88f1a8f0bda547aef9ca81fb`, package version `2.8.3`
+
+Implementation verification:
+
+- default MCP server test suite: 263/263 passing
+- TypeScript typecheck: passing
+- Cloudflare Worker dry-run build: passing, with no `node-llama-cpp` symbols in the Worker output
+- cold-cache real GGUF runtime: automatic model acquisition reached `ready`
+- warm-cache networkless restart: `bubblewrap --unshare-net` reached `ready` and passed semantic retrieval
+- real mcporter round trip: keyword search, semantic search, provenance, pagination, reindex, and cleanup all passing
 
 ## Decision
 

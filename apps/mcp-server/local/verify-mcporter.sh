@@ -15,6 +15,29 @@ call() {
   mcporter call "${server}.${tool}" --args "$args" --output json
 }
 
+wait_for_semantic_ready() {
+  local timeout_seconds="${ENGRAM_LOCAL_VERIFY_READY_TIMEOUT_SECONDS:-900}"
+  local started now payload state
+  started="$(date +%s)"
+  while true; do
+    payload="$(call memory_status '{}')"
+    state="$(jq -r '.semantic.state // "missing"' <<<"$payload")"
+    case "$state" in
+      ready) return 0 ;;
+      degraded)
+        jq -r '.semantic.error // "local semantic runtime degraded"' <<<"$payload" >&2
+        return 1
+        ;;
+    esac
+    now="$(date +%s)"
+    if (( now - started >= timeout_seconds )); then
+      echo "timed out waiting for local semantic runtime; last state=$state" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 cleanup() {
   local id
   for id in "$memory_conversation_id" "$source_id"; do
@@ -27,6 +50,7 @@ trap cleanup EXIT
 
 status="$(mcporter list "$server" --status --json)"
 jq -e '.servers[0].status == "ok"' <<<"$status" >/dev/null
+wait_for_semantic_ready
 baseline_total="$(call list_conversations '{"limit":1}' | jq -er '.total')"
 baseline_used="$(call memory_status '{}' | jq -er '.storage.used')"
 

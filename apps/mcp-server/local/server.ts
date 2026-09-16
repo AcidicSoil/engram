@@ -8,6 +8,8 @@ import { createMcpServer } from "../src/mcp/server.js";
 import type { AuthContext, Env } from "../src/types.js";
 import { applyUpstreamMigrations, LocalD1Database, seedLocalOwner } from "./sqlite-d1.js";
 import { createLocalAi, createLocalVectorize, localContentBucket } from "./local-bindings.js";
+import { LocalEmbeddingRuntime } from "./embedding-runtime.js";
+import { LocalSemanticIndexCoordinator } from "./semantic-index.js";
 import { reindexConversation } from "./reindex.js";
 import { registerAbptTools } from "./abpt-tools.js";
 
@@ -16,20 +18,26 @@ const repoRoot = resolve(here, "../../..");
 const migrationsDir = join(repoRoot, "packages", "db", "migrations");
 const dataHome = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
 const dbPath = process.env.ENGRAM_LOCAL_DB ?? join(dataHome, "engram", "local.db");
-const embeddingUrl = process.env.ENGRAM_LOCAL_EMBEDDING_URL ?? "http://127.0.0.1:1234/v1/embeddings";
-const embeddingModel = process.env.ENGRAM_LOCAL_EMBEDDING_MODEL ?? "text-embedding-nomic-embed-text-v1.5";
 const organizationId = "org_local";
 const abptApiUrl = process.env.ABPT_API_URL ?? "http://127.0.0.1:4318";
 
 const localDb = new LocalD1Database(dbPath);
 applyUpstreamMigrations(localDb.raw, migrationsDir);
 seedLocalOwner(localDb.raw, organizationId);
+const embeddingRuntime = new LocalEmbeddingRuntime();
+
+function activeEmbeddingFingerprint(): string | null {
+  const status = embeddingRuntime.status();
+  return status.state === "ready" ? status.fingerprint : null;
+}
 
 const env = {
   DB: localDb as unknown as D1Database,
   CONTENT: localContentBucket as unknown as R2Bucket,
-  VECTORIZE: createLocalVectorize(localDb.raw) as unknown as VectorizeIndex,
-  AI: createLocalAi(embeddingUrl, embeddingModel) as unknown as Ai,
+  VECTORIZE: createLocalVectorize(localDb.raw, {
+    fingerprint: activeEmbeddingFingerprint,
+  }) as unknown as VectorizeIndex,
+  AI: createLocalAi(embeddingRuntime) as unknown as Ai,
   LOCAL_INLINE_CONTENT: true,
   SELF: {} as Fetcher,
   DRAINER: {} as DurableObjectNamespace,
@@ -52,7 +60,17 @@ const auth: AuthContext = {
   seatId: null,
 };
 
-const server = createMcpServer(env, auth, { mode: "local" });
+const semanticIndex = new LocalSemanticIndexCoordinator({
+  db: localDb.raw,
+  env,
+  auth,
+  runtime: embeddingRuntime,
+});
+
+const server = createMcpServer(env, auth, {
+  mode: "local",
+  localStatus: () => semanticIndex.status(),
+});
 registerAbptTools(server, { baseUrl: abptApiUrl });
 server.registerTool(
   "reindex",
@@ -81,10 +99,22 @@ server.registerTool(
   },
 );
 await server.connect(new StdioServerTransport());
+semanticIndex.start(1000);
+
+let shuttingDown = false;
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  semanticIndex.stop();
+  try {
+    await embeddingRuntime.dispose();
+  } finally {
+    localDb.close();
+  }
+}
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
-    localDb.close();
-    process.exit(0);
+    void shutdown().finally(() => process.exit(0));
   });
 }

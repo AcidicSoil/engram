@@ -12,13 +12,15 @@
     "db:migrate:local": "wrangler d1 migrations apply engram-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply engram-db --remote",
     "seed": "node --loader tsx scripts/seed.ts",
-    "seed:demo": "node --loader tsx scripts/seed-demo.ts"
+    "seed:demo": "node --loader tsx scripts/seed-demo.ts",
+    "verify:local-real": "bash local/verify-mcporter.sh"
   },
   "dependencies": {
     "@getengram/db": "workspace:*",
     "@getengram/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.6.0",
     "hono": "^4.12.34",
+    "node-llama-cpp": "3.20.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

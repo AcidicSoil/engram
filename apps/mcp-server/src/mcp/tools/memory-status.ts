@@ -8,6 +8,18 @@ import { isExternalOAuthClient } from "../auth-kind.js";
 import { firstRunActivationForCount } from "../coaching.js";
 import type { Env, AuthContext } from "../../types.js";
 
+export type LocalSemanticStatusView = {
+  state: "preparing" | "ready" | "reindexing" | "degraded";
+  model: string;
+  cachePath: string;
+  backend?: string;
+  dimensions?: number;
+  fingerprint?: string;
+  vectorCount: number;
+  rebuildPending: boolean;
+  error?: string;
+};
+
 /**
  * memory_status — "how full is my memory?" Read-only usage meter for any
  * client. ChatGPT/Claude relay the bar string verbatim, which gives users
@@ -17,7 +29,10 @@ export function registerMemoryStatus(
   server: McpServer,
   env: Env,
   auth: AuthContext,
-  options: { local?: boolean } = {},
+  options: {
+    local?: boolean;
+    localStatus?: () => LocalSemanticStatusView;
+  } = {},
 ) {
   const description = options.local
     ? "Show local memory storage usage and local semantic-index status. Local personal mode has unlimited canonical storage and does not depend on a hosted Engram account or plan."
@@ -45,6 +60,17 @@ export function registerMemoryStatus(
           .optional()
           .describe("Monthly velocity meter — only present on tiers with a monthly limit"),
         note: z.string(),
+        semantic: z.object({
+          state: z.enum(["preparing", "ready", "reindexing", "degraded"]),
+          model: z.string(),
+          cache_path: z.string(),
+          backend: z.string().optional(),
+          dimensions: z.number().optional(),
+          fingerprint: z.string().optional(),
+          vector_count: z.number(),
+          rebuild_pending: z.boolean(),
+          error: z.string().optional(),
+        }).optional(),
       },
       annotations: {
         title: "Memory status",
@@ -97,10 +123,29 @@ export function registerMemoryStatus(
               },
             }
           : {}),
-        note:
-          storageLimit > 0
+        note: options.local
+          ? "Local memory never expires. Canonical storage is limited only by this machine."
+          : storageLimit > 0
             ? `Memory never expires — deleting conversations frees space. More room: upgrade at ${upgradeAt}.`
             : "Memory never expires. This plan has unlimited storage.",
+        ...(options.localStatus
+          ? (() => {
+              const semantic = options.localStatus();
+              return {
+                semantic: {
+                  state: semantic.state,
+                  model: semantic.model,
+                  cache_path: semantic.cachePath,
+                  ...(semantic.backend ? { backend: semantic.backend } : {}),
+                  ...(semantic.dimensions !== undefined ? { dimensions: semantic.dimensions } : {}),
+                  ...(semantic.fingerprint ? { fingerprint: semantic.fingerprint } : {}),
+                  vector_count: semantic.vectorCount,
+                  rebuild_pending: semantic.rebuildPending,
+                  ...(semantic.error ? { error: semantic.error } : {}),
+                },
+              };
+            })()
+          : {}),
         // First-run forcing function — the server instructions tell clients to
         // call memory_status first; the RESULT itself carries the activation
         // script for brand-new accounts (storageUsed known here, no extra query).
