@@ -12,3 +12,5 @@ supabase/.temp/
 !.claude/skills/
 docs/launch/handoff/
 supabase/.temp/
+mcpb/node_modules/
+mcpb/*.mcpb

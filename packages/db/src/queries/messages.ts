@@ -13,7 +13,28 @@ export function insertMessages(
     metadata: Record<string, unknown>;
   }>
 ) {
-  const stmts = messages.map((m) =>
+  return db.batch(insertMessageStatements(db, messages));
+}
+
+/** The INSERT statements for a batch of messages, without executing them — so
+ *  a caller can commit them ATOMICALLY together with a counter update in one
+ *  db.batch (D1 batches are transactional). Used by insertMessagesWithCount. */
+function insertMessageStatements(
+  db: D1Database,
+  messages: Array<{
+    id: string;
+    conversationId: string;
+    organizationId: string;
+    role: string;
+    content: string;
+    contentEncoding: string | null;
+    toolCallId: string | null;
+    toolName: string | null;
+    sequence: number;
+    metadata: Record<string, unknown>;
+  }>,
+) {
+  return messages.map((m) =>
     db
       .prepare(
         "INSERT INTO messages (id, conversation_id, organization_id, role, content, content_encoding, tool_call_id, tool_name, sequence, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -31,7 +52,40 @@ export function insertMessages(
         JSON.stringify(m.metadata)
       )
   );
-  return db.batch(stmts);
+}
+
+/**
+ * Insert messages AND bump the conversation's message_count in ONE atomic
+ * batch. Previously the inserts and the count update were two separate calls,
+ * so a failure between them (or a dropped second call) left message_count
+ * drifting below the real row count — the same "counter maintained by
+ * convention" class that miscounted ~984 orgs' storage totals. One batch means
+ * they can never diverge.
+ */
+export function insertMessagesWithCount(
+  db: D1Database,
+  messages: Array<{
+    id: string;
+    conversationId: string;
+    organizationId: string;
+    role: string;
+    content: string;
+    contentEncoding: string | null;
+    toolCallId: string | null;
+    toolName: string | null;
+    sequence: number;
+    metadata: Record<string, unknown>;
+  }>,
+  conversationId: string,
+) {
+  return db.batch([
+    ...insertMessageStatements(db, messages),
+    db
+      .prepare(
+        "UPDATE conversations SET message_count = message_count + ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .bind(messages.length, conversationId),
+  ]);
 }
 
 export function getMessagesByConversation(
@@ -145,4 +199,21 @@ export function getR2MessageIdsByOrganization(
     )
     .bind(organizationId)
     .all<{ id: string }>();
+}
+
+/** One rowid-cursored page of an org's R2-backed message ids. Lets the GDPR
+ *  purge stream a multi-million-message org's R2 keys instead of loading them
+ *  all into the 128MB isolate at once (which would OOM the whole purge run). */
+export function getR2MessageIdsByOrganizationPage(
+  db: D1Database,
+  organizationId: string,
+  afterRowid: number,
+  limit: number,
+) {
+  return db
+    .prepare(
+      "SELECT rowid AS rid, id FROM messages WHERE organization_id = ? AND content_encoding LIKE 'r2:%' AND rowid > ? ORDER BY rowid LIMIT ?",
+    )
+    .bind(organizationId, afterRowid, limit)
+    .all<{ rid: number; id: string }>();
 }

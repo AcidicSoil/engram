@@ -9,6 +9,7 @@ import {
   PRIVACY_CROSS_CONVERSATION_NOTICE,
 } from "../../services/privacy.js";
 import { hasScope, scopeError } from "../scopes.js";
+import { MAX_SEARCH_QUERY_CHARS } from "@getengram/shared";
 import { searchEmptyTip, firstRunActivation } from "../coaching.js";
 import type { Env, AuthContext } from "../../types.js";
 
@@ -21,9 +22,9 @@ export function registerSearch(
     "search",
     {
       description:
-        "Hybrid search (semantic + keyword) across stored conversations. Each result has a short chunk_summary for quick triage plus the full chunk_text snippet, with conversation_title, tags, and scores. Read chunk_summary to pick the relevant result, then use chunk_text or get_conversation for full context. One search is enough — do not retry with rephrased queries.",
+        "Hybrid search (semantic + keyword) across stored conversations. Each result includes a short chunk_summary, the full chunk_text snippet, conversation_title, tags, and relevance scores, best match first.",
       inputSchema: {
-      query: z.string().describe("Search query text"),
+      query: z.string().max(MAX_SEARCH_QUERY_CHARS).describe("Search query text"),
       limit: z
         .number()
         .int()

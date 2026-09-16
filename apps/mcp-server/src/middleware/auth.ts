@@ -1,14 +1,30 @@
 import type { Context, Next } from "hono";
+import { requestCountry } from "../utils/geo.js";
 import { hashApiKey } from "@getengram/shared";
 import {
   getApiKeyWithOrg,
+  touchOrganizationCountry,
   updateApiKeyLastUsed,
   getAccessTokenWithOrg,
 } from "@getengram/db";
-import { audit } from "../services/audit.js";
 import { originOf, wwwAuthenticate } from "../oauth/metadata.js";
-import { ALL_SCOPES, parseScopes } from "../mcp/scopes.js";
+import { ALL_SCOPES, parseScopes, oauthScopeToInternal } from "../mcp/scopes.js";
 import type { Env, AuthContext } from "../types.js";
+
+/** Constant-time string compare, so the admin-secret check doesn't leak the
+ *  secret's length or a matching prefix through response-timing. Compares a
+ *  fixed number of bytes regardless of where (or whether) they differ. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  // Fold length into the result rather than early-returning on it.
+  let diff = ab.length ^ bb.length;
+  for (let i = 0; i < ab.length; i++) {
+    diff |= ab[i] ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
+}
 
 export async function authMiddleware(
   c: Context<{ Bindings: Env; Variables: { auth: AuthContext } }>,
@@ -30,7 +46,7 @@ export async function authMiddleware(
 
   // Admin access via ADMIN_SECRET — cross-org visibility for the business owner.
   const adminSecret = (c.env as Env & { ADMIN_SECRET?: string }).ADMIN_SECRET;
-  if (adminSecret && token === adminSecret) {
+  if (adminSecret && timingSafeEqual(token, adminSecret)) {
     c.set("auth", {
       organizationId: "admin",
       apiKeyId: "admin",
@@ -54,9 +70,11 @@ export async function authMiddleware(
       organizationId: row.organization_id,
       apiKeyId: `oauth:${row.client_id}`,
       tier: (row.tier ?? "free") as AuthContext["tier"],
-      // OAuth connections get the full memory scope set; their tool surface
-      // is already narrowed elsewhere (isExternalOAuthClient).
-      scopes: [...ALL_SCOPES],
+      // Grant only what the user consented to (engram:read / engram:write),
+      // mapped to internal scopes — and NEVER delete, which is not in the
+      // OAuth vocabulary. Previously every OAuth token got the full set, so a
+      // read-only consent could write and delete.
+      scopes: oauthScopeToInternal(row.scope),
     });
     await next();
     return;
@@ -72,9 +90,12 @@ export async function authMiddleware(
   const row = await getApiKeyWithOrg(c.env.DB, keyHash);
 
   if (!row) {
-    await audit(c.env.DB, "unknown", null, "auth.failure", undefined, undefined, {
-      reason: "invalid_key",
-    });
+    // Do NOT write an audit_log row here. It is not attributable to any org
+    // (there is no valid key), and a spray of invalid keys would otherwise
+    // write one D1 row per request into the shared audit_log — unbounded
+    // growth and a cheap amplification against the shared database. A console
+    // line is enough to spot a spray in the logs without a durable write.
+    console.warn("[auth] invalid api key rejected");
     challenge();
     return c.json({ error: "Invalid API key" }, 401);
   }
@@ -89,6 +110,17 @@ export async function authMiddleware(
 
   // Update last_used_at non-blocking
   c.executionCtx.waitUntil(updateApiKeyLastUsed(c.env.DB, row.key_id));
+
+  // Backfill the org's country on first sight. Writes only where country IS
+  // NULL, so this is a no-op for everyone already stamped and costs one cheap
+  // indexed UPDATE once per account. It is how accounts created before the
+  // column existed acquire one — there is no way to derive it retroactively.
+  const country = requestCountry(c.req.raw);
+  if (country) {
+    c.executionCtx.waitUntil(
+      touchOrganizationCountry(c.env.DB, row.organization_id, country).catch(() => {}),
+    );
+  }
 
   await next();
 }

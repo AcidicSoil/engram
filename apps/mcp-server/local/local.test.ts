@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,7 +81,8 @@ test("local adapters run upstream conversation and search services", async () =>
     expect(semantic[0]?.conversation_id).toBe(conversationId);
 
     const migrations = db.raw.prepare("SELECT COUNT(*) AS count FROM _local_migrations").get() as { count: number };
-    expect(migrations.count).toBe(36);
+    const expectedMigrations = readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).length;
+    expect(migrations.count).toBe(expectedMigrations);
     const vectors = db.raw.prepare("SELECT COUNT(*) AS count FROM local_vectors").get() as { count: number };
     expect(vectors.count).toBeGreaterThan(0);
   } finally {

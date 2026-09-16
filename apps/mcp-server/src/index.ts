@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
@@ -11,6 +13,7 @@ import { usage } from "./routes/usage.js";
 import { signup } from "./routes/signup.js";
 import { billing, billingSession, billingWebhook } from "./routes/billing.js";
 import { admin } from "./routes/admin.js";
+import { mergeOrgs } from "./routes/merge-orgs.js";
 import { dashboardHtml } from "./routes/admin-dashboard.js";
 import { account } from "./routes/account.js";
 import { privacy } from "./routes/privacy.js";
@@ -47,12 +50,48 @@ type HonoEnv = {
 
 const app = new Hono<HonoEnv>();
 
+// Global request body cap. The append schemas bound per-message content, but
+// this is the transport-level backstop against a multi-megabyte payload
+// (compressed bombs, giant metadata, oversized vault blobs) reaching a handler
+// at all. 8 MB is comfortably above the largest legitimate append batch
+// (200 messages x 100k chars is the schema ceiling, but real batches are tiny)
+// while bounding worst-case memory in the 128 MB isolate.
+app.use("*", bodyLimit({ maxSize: 8 * 1024 * 1024 }));
+
 // Global error handler — catches any uncaught exception and returns a
 // structured 500 instead of letting Cloudflare surface `scriptThrewException`.
+// The real error is logged server-side; the response body is generic so an
+// internal message (a query fragment, a stack detail) is never disclosed to
+// the caller.
 app.onError((err, c) => {
-  console.error(`[error] ${c.req.method} ${c.req.path}: ${err.message}`);
+  // Honor deliberate HTTP errors (bodyLimit's 413, any hand-thrown
+  // HTTPException) with their real status + body — the generic-500 rewrite
+  // below is only for genuinely uncaught exceptions, and must not mask a 4xx
+  // as a 500.
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+  // Transient D1 pressure (the "D1 overloaded" 7429 class, busy/timeout/
+  // dropped-connection) is not a bug — it's back-pressure. Returning a blanket
+  // 500 turned one hot D1 period into a full API outage with nothing telling
+  // the client to slow down; a 503 + Retry-After lets callers (the CLI already
+  // backs off on it) retry instead of hammering a struggling database.
+  const msg = err.message || "";
+  const transient =
+    /overloaded|SQLITE_BUSY|Network connection lost|timed out|connection reset|storage.*(unavailable|busy)/i.test(
+      msg,
+    );
+  if (transient) {
+    console.error(`[error] ${c.req.method} ${c.req.path}: transient D1 — ${msg}`);
+    c.header("Retry-After", "2");
+    return c.json(
+      { error: "service_unavailable", message: "The service is briefly overloaded. Retry shortly." },
+      503,
+    );
+  }
+  console.error(`[error] ${c.req.method} ${c.req.path}: ${msg}`);
   return c.json(
-    { error: "internal_error", message: err.message },
+    { error: "internal_error", message: "An internal error occurred." },
     500,
   );
 });
@@ -241,6 +280,8 @@ app.use("/admin/*", async (c, next) => {
   await next();
 });
 app.route("/admin", admin);
+// Same "/admin/*" ADMIN_SECRET middleware above guards this router too.
+app.route("/admin", mergeOrgs);
 
 // REST API routes (all require auth). CORS runs before the auth middleware
 // so preflight OPTIONS requests succeed without a bearer token.
@@ -344,42 +385,47 @@ export default {
       }
       return;
     }
-    const purged = await purgeDeletedOrganizations(env);
-    if (purged > 0) {
-      console.log(`[cron] Purged ${purged} expired organization(s)`);
+    // The 03:00 branch. Each job is ISOLATED: without this, a single throw
+    // (e.g. the GDPR purge OOMing on a large org) silently skipped every job
+    // after it — grace expiry, retention deletion, and all lifecycle nudges.
+    // The compliance jobs (purge, grace, retention) matter most, so they run
+    // first; a failure in any one is logged with context and the rest still
+    // run. `runJob` also feeds a heartbeat so a silently-failing cron is
+    // observable rather than invisible (the daily report had stopped once
+    // with nobody noticing).
+    const failures: string[] = [];
+    async function runJob(name: string, fn: () => Promise<number>): Promise<void> {
+      try {
+        const n = await fn();
+        if (n > 0) console.log(`[cron] ${name}: ${n}`);
+      } catch (err) {
+        failures.push(name);
+        console.error(`[cron] ${name} FAILED: ${err instanceof Error ? err.message : err}`);
+      }
     }
-    const graceExpired = await expireGracePeriods(env);
-    if (graceExpired > 0) {
-      console.log(`[cron] Expired ${graceExpired} grace period(s)`);
-    }
+
+    await runJob("purge expired orgs", () => purgeDeletedOrganizations(env));
+    await runJob("expire grace periods", () => expireGracePeriods(env));
     // Enterprise custom-retention policies (engram#289) — no-op unless an
     // admin has explicitly set retention_policy_days on an org.
-    const retentionDeleted = await enforceRetentionPolicies(env);
-    if (retentionDeleted > 0) {
-      console.log(`[cron] Retention policy deleted ${retentionDeleted} conversation(s)`);
-    }
-    // Import-first onboarding (engram#253): one nudge email per org that
-    // signed up yesterday and hasn't stored anything yet.
-    const nudged = await sendImportNudges(env);
-    if (nudged > 0) {
-      console.log(`[cron] Sent ${nudged} import-nudge email(s)`);
-    }
+    await runJob("retention policy", () => enforceRetentionPolicies(env));
+    // Import-first onboarding (engram#253): one nudge per org that signed up
+    // yesterday and hasn't stored anything yet.
+    await runJob("import nudges", () => sendImportNudges(env));
     // Maxout upgrade nudge: free orgs that filled their 10k-message memory.
-    const maxout = await sendMaxoutNudges(env);
-    if (maxout > 0) {
-      console.log(`[cron] Sent ${maxout} maxout-nudge email(s)`);
-    }
-    // Activation nudge: dormant orgs (signed up 7d ago, still empty) — one
-    // email showing them the "aha" so a paid-for signup doesn't stall.
-    const activated = await sendActivationNudges(env);
-    if (activated > 0) {
-      console.log(`[cron] Sent ${activated} activation-nudge email(s)`);
-    }
-    // Recall nudge: saved a real memory but never had a search return a hit —
-    // the funnel's biggest measured leak (177 saved vs 50 recalled, 2026-08).
-    const recalled = await sendRecallNudges(env);
-    if (recalled > 0) {
-      console.log(`[cron] Sent ${recalled} recall-nudge email(s)`);
+    await runJob("maxout nudges", () => sendMaxoutNudges(env));
+    // Activation nudge: dormant orgs (signed up 7d ago, still empty).
+    await runJob("activation nudges", () => sendActivationNudges(env));
+    // Recall nudge: saved a memory but never had a search return a hit — the
+    // funnel's biggest measured leak (177 saved vs 50 recalled, 2026-08).
+    await runJob("recall nudges", () => sendRecallNudges(env));
+
+    // Heartbeat: one line every run naming which jobs (if any) failed, so a
+    // partial cron failure is greppable instead of silent.
+    if (failures.length > 0) {
+      console.error(`[cron] 03:00 completed with ${failures.length} failed job(s): ${failures.join(", ")}`);
+    } else {
+      console.log("[cron] 03:00 completed: all jobs ok");
     }
   },
 };

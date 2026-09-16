@@ -4,6 +4,7 @@ import {
   chunkId,
   summarizeChunk,
   redactMessages,
+  MAX_MESSAGE_CONTENT_CHARS,
   type MessageInput,
   type Message,
   type Conversation,
@@ -15,9 +16,8 @@ import {
   getDefaultConversationId,
   DEFAULT_CONVERSATION_TAG,
   listConversations as dbListConversations,
-  updateConversationMessageCount,
   deleteConversationById,
-  insertMessages,
+  insertMessagesWithCount,
   getMessagesByConversation,
   getMaxSequence,
   insertChunks,
@@ -147,6 +147,30 @@ export function assertWritesEnabled(env: Env): void {
   }
 }
 
+/**
+ * Bound single-message content by TRUNCATING, not rejecting. This caps
+ * worst-case stored bytes (a free org's 10k-message cap x this ceiling is the
+ * storage ceiling) without wedging the CLI sync daemon, which cannot split one
+ * oversized message and would otherwise re-send and re-fail the same row
+ * forever. A visible marker keeps it honest — the reader sees the memory was
+ * clipped rather than silently altered. Enormous single messages are
+ * tool-output dumps (Claude Code), where the tail is the least useful part;
+ * the request still succeeds and every other message is stored verbatim.
+ * Exported for direct testing.
+ */
+export function boundMessageContent(messageInputs: MessageInput[]): MessageInput[] {
+  return messageInputs.map((m) =>
+    m.content.length > MAX_MESSAGE_CONTENT_CHARS
+      ? {
+          ...m,
+          content:
+            m.content.slice(0, MAX_MESSAGE_CONTENT_CHARS) +
+            `\n\n…[truncated: message exceeded ${MAX_MESSAGE_CONTENT_CHARS.toLocaleString()} characters]`,
+        }
+      : m,
+  );
+}
+
 export async function appendMessages(
   env: Env,
   organizationId: string,
@@ -155,6 +179,8 @@ export async function appendMessages(
   vaultEntries?: VaultEntryInput[]
 ): Promise<Message[]> {
   assertWritesEnabled(env);
+
+  messageInputs = boundMessageContent(messageInputs);
 
   // Verify conversation exists and belongs to org
   const conv = await getConversationById(env.DB, conversationId, organizationId);
@@ -195,8 +221,10 @@ export async function appendMessages(
     redacted.map((m) => storeContent(env, m.id, m.content))
   );
 
-  // Insert message rows (content lives in R2; D1 row carries the pointer)
-  await insertMessages(
+  // Insert message rows (content lives in R2; D1 row carries the pointer) AND
+  // bump the conversation's message_count in the SAME atomic batch, so the
+  // count can never drift from the actual rows.
+  await insertMessagesWithCount(
     env.DB,
     redacted.map((m, i) => ({
       id: m.id,
@@ -209,7 +237,8 @@ export async function appendMessages(
       toolName: m.tool_name,
       sequence: m.sequence,
       metadata: m.metadata,
-    }))
+    })),
+    conversationId,
   );
 
   // Store client-encrypted vault entries (zero-knowledge — server never decrypts)
@@ -232,8 +261,7 @@ export async function appendMessages(
     );
   }
 
-  // Update conversation message count
-  await updateConversationMessageCount(env.DB, conversationId, redacted.length);
+  // (message_count was bumped atomically with the inserts above.)
 
   // Chunk the redacted messages for embedding.
   // Indexing (embeddings + vectorize) is best-effort — if it fails, messages

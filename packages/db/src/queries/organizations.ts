@@ -1,7 +1,13 @@
-export function insertOrganization(db: D1Database, id: string, name: string, referralSource?: string) {
+export function insertOrganization(
+  db: D1Database,
+  id: string,
+  name: string,
+  referralSource?: string,
+  country?: string | null,
+) {
   return db
-    .prepare("INSERT INTO organizations (id, name, referral_source) VALUES (?, ?, ?)")
-    .bind(id, name, referralSource ?? null)
+    .prepare("INSERT INTO organizations (id, name, referral_source, country) VALUES (?, ?, ?, ?)")
+    .bind(id, name, referralSource ?? null, country ?? null)
     .run();
 }
 
@@ -18,10 +24,35 @@ export function insertOrganizationWithEmail(
   name: string,
   email: string,
   referralSource?: string,
+  country?: string | null,
 ) {
   return db
-    .prepare("INSERT INTO organizations (id, name, email, referral_source) VALUES (?, ?, ?, ?)")
-    .bind(id, name, email, referralSource ?? null)
+    .prepare(
+      "INSERT INTO organizations (id, name, email, referral_source, country) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(id, name, email, referralSource ?? null, country ?? null)
+    .run();
+}
+
+/**
+ * Fill in an organization's country the first time we see a request from it.
+ *
+ * Only ever writes when country IS NULL, which does two things: it backfills
+ * accounts created before the column existed, and it makes the value "where
+ * this account signed up from" rather than "where they last happened to be" —
+ * a stable attribute that does not flicker when someone travels or uses a VPN.
+ *
+ * The WHERE clause means the common case (already set) writes no rows, so this
+ * is cheap to call on every authenticated request.
+ */
+export function touchOrganizationCountry(
+  db: D1Database,
+  id: string,
+  country: string,
+) {
+  return db
+    .prepare("UPDATE organizations SET country = ? WHERE id = ? AND country IS NULL")
+    .bind(country, id)
     .run();
 }
 
@@ -125,6 +156,22 @@ export function getVectorizeIdsByOrganization(
     .all<{ vectorize_id: string }>();
 }
 
+/** One rowid-cursored page of an org's vector ids — same streaming purpose as
+ *  getR2MessageIdsByOrganizationPage, for the GDPR purge's Vectorize deletes. */
+export function getVectorizeIdsByOrganizationPage(
+  db: D1Database,
+  organizationId: string,
+  afterRowid: number,
+  limit: number,
+) {
+  return db
+    .prepare(
+      "SELECT rowid AS rid, vectorize_id FROM conversation_chunks WHERE organization_id = ? AND rowid > ? ORDER BY rowid LIMIT ?",
+    )
+    .bind(organizationId, afterRowid, limit)
+    .all<{ rid: number; vectorize_id: string }>();
+}
+
 export function deleteOrganizationById(db: D1Database, id: string) {
   return db.batch([
     // FTS delete must come before chunks (subquery references conversation_chunks)
@@ -136,6 +183,11 @@ export function deleteOrganizationById(db: D1Database, id: string) {
     db.prepare("DELETE FROM messages WHERE organization_id = ?").bind(id),
     db.prepare("DELETE FROM conversation_tags WHERE organization_id = ?").bind(id),
     db.prepare("DELETE FROM conversations WHERE organization_id = ?").bind(id),
+    // email_log has no FK (its org_id predates the constraint), so the
+    // cascade never touches it — without this line a purged org left its
+    // recipient email addresses behind, which is exactly the personal data
+    // an erasure request is about. Every other org-linked table cascades.
+    db.prepare("DELETE FROM email_log WHERE org_id = ?").bind(id),
     db.prepare("DELETE FROM organizations WHERE id = ?").bind(id),
   ]);
 }
@@ -156,11 +208,15 @@ export function restoreOrganization(db: D1Database, id: string) {
     .run();
 }
 
-export function getExpiredOrganizations(db: D1Database) {
+export function getExpiredOrganizations(db: D1Database, limit = 50) {
+  // Bounded per run: a large backlog is worked down over successive nightly
+  // runs rather than attempted all at once, so the purge can't blow the
+  // worker's CPU/time budget on a bad night and strand everything.
   return db
     .prepare(
-      "SELECT id FROM organizations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-30 days')",
+      "SELECT id FROM organizations WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-30 days') ORDER BY deleted_at LIMIT ?",
     )
+    .bind(limit)
     .all<{ id: string }>();
 }
 
@@ -232,4 +288,26 @@ export function getStorageUsed(db: D1Database, organizationId: string) {
     .prepare("SELECT messages_stored_total FROM organizations WHERE id = ?")
     .bind(organizationId)
     .first<{ messages_stored_total: number }>();
+}
+
+/**
+ * Recompute an org's denormalized counters from the actual rows. The counters
+ * (messages_stored_total, conversation_count) are maintained incrementally, so
+ * any operation that moves rows without touching them drifts the counters —
+ * most sharply org-merge, which relocated messages and conversations between
+ * orgs but never adjusted either side's totals (that's how a merged org ended
+ * up ~75k messages undercounted). Setting them to the live COUNT is exact and
+ * idempotent, so it both fixes a merge and heals pre-existing drift. Safe to
+ * call repeatedly and safe to wire into a periodic reconcile.
+ */
+export function reconcileOrgCounters(db: D1Database, organizationId: string) {
+  return db
+    .prepare(
+      `UPDATE organizations SET
+         messages_stored_total = (SELECT COUNT(*) FROM messages WHERE organization_id = ?),
+         conversation_count = (SELECT COUNT(*) FROM conversations WHERE organization_id = ?)
+       WHERE id = ?`,
+    )
+    .bind(organizationId, organizationId, organizationId)
+    .run();
 }
