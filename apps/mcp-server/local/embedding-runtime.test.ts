@@ -6,6 +6,7 @@ import {
   DEFAULT_EMBED_MODEL_URI,
   EMBEDDING_INPUT_FORMAT_VERSION,
   LocalEmbeddingRuntime,
+  createNodeLlamaBindings,
   formatEmbeddingText,
   inspectGgufFile,
   resolveLocalEmbeddingConfig,
@@ -121,6 +122,44 @@ function fakeNative(modelPath: string, failAuto = false) {
     gpuLlama,
   };
 }
+
+describe("node-llama-cpp boundary", () => {
+  test("never replaces MCP stdout while native initialization is pending", async () => {
+    let release!: (value: unknown) => void;
+    const nativeLlama = {
+      gpu: "cuda",
+      loadModel: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const getLlama = vi.fn(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+    const native = {
+      getLlama,
+      resolveModelFile: vi.fn(),
+    } as unknown as typeof import("node-llama-cpp");
+    const bindings = createNodeLlamaBindings(native);
+    const originalStdoutWrite = process.stdout.write;
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const pending = bindings.getLlama({ gpu: "auto" });
+    await Promise.resolve();
+
+    expect(process.stdout.write).toBe(originalStdoutWrite);
+    const options = getLlama.mock.calls[0]?.[0] as {
+      progressLogs?: boolean | "stderr";
+      logger?: (level: number, message: string) => void;
+    };
+    expect(options.progressLogs).toBe("stderr");
+    options.logger?.(0, "native log");
+    expect(stderrWrite).toHaveBeenCalledWith("native log");
+
+    release(nativeLlama);
+    await pending;
+    expect(process.stdout.write).toBe(originalStdoutWrite);
+    stderrWrite.mockRestore();
+  });
+});
 
 describe("LocalEmbeddingRuntime", () => {
   test("falls back from automatic GPU initialization to CPU", async () => {

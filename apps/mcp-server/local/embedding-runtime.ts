@@ -198,39 +198,26 @@ async function sha256File(filePath: string): Promise<string> {
   return hash.digest("hex");
 }
 
-type StdoutWrite = typeof process.stdout.write;
-let nativeStdoutRedirectDepth = 0;
-let originalStdoutWrite: StdoutWrite | null = null;
-
-async function withNativeStdoutOnStderr<T>(work: () => Promise<T>): Promise<T> {
-  if (nativeStdoutRedirectDepth === 0) {
-    originalStdoutWrite = process.stdout.write.bind(process.stdout) as StdoutWrite;
-    process.stdout.write = process.stderr.write.bind(process.stderr) as StdoutWrite;
-  }
-  nativeStdoutRedirectDepth++;
-  try {
-    return await work();
-  } finally {
-    nativeStdoutRedirectDepth--;
-    if (nativeStdoutRedirectDepth === 0 && originalStdoutWrite) {
-      process.stdout.write = originalStdoutWrite;
-      originalStdoutWrite = null;
-    }
-  }
-}
-
-async function defaultBindings(): Promise<LocalLlamaBindings> {
-  const native = await withNativeStdoutOnStderr(() => import("node-llama-cpp"));
+export function createNodeLlamaBindings(
+  native: typeof import("node-llama-cpp"),
+): LocalLlamaBindings {
   return {
-    resolveModelFile: (model, options) =>
-      withNativeStdoutOnStderr(() => native.resolveModelFile(model, options)),
+    resolveModelFile: (model, options) => native.resolveModelFile(model, options),
     async getLlama(options) {
-      const llama = await withNativeStdoutOnStderr(() =>
-        native.getLlama({ gpu: options.gpu }),
-      );
+      const llama = await native.getLlama({
+        gpu: options.gpu,
+        progressLogs: "stderr",
+        logger: (_level, message) => {
+          process.stderr.write(message);
+        },
+      });
       return wrapLlama(llama);
     },
   };
+}
+
+async function defaultBindings(): Promise<LocalLlamaBindings> {
+  return createNodeLlamaBindings(await import("node-llama-cpp"));
 }
 type NodeLlama = Awaited<ReturnType<(typeof import("node-llama-cpp"))["getLlama"]>>;
 
